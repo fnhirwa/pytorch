@@ -25,6 +25,7 @@ from torch.testing._internal.common_utils import (
     shell,
     set_cwd,
     parser as common_parser,
+    wait_for_process,
 )
 import torch.distributed as dist
 
@@ -386,7 +387,10 @@ def run_test(
 
     command = (launcher_cmd or []) + executable + argv
     print_to_stderr("Executing {} ... [{}]".format(command, datetime.now()))
-    return shell(command, test_directory)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    p = subprocess.Popen(command, universal_newlines=True, cwd=test_directory)
+    return p
 
 
 def test_cuda_primary_ctx(test_module, test_directory, options):
@@ -938,12 +942,34 @@ def main():
 
     has_failed = False
     failure_messages = []
+    procs = []
     try:
         for test in selected_tests:
             options_clone = copy.deepcopy(options)
             if test in USE_PYTEST_LIST:
                 options_clone.pytest = True
-            err_message = run_test_module(test, test_directory, options_clone)
+            test_module = parse_test_module(test)
+
+            print_to_stderr("Running {} ... [{}]".format(test, datetime.now()))
+            handler = CUSTOM_HANDLERS.get(test_module, run_test)
+            p = handler(test_module, test_directory, options)
+            procs.append(p)
+        for p in procs:
+            return_code = wait_for_process(p)
+            assert isinstance(return_code, int) and not isinstance(
+                return_code, bool
+            ), "Return code should be an integer"
+            if return_code == 0:
+                return None
+
+            message = f"{test} failed!"
+            if return_code < 0:
+                # subprocess.Popen returns the child process' exit signal as
+                # return code -N, where N is the signal number.
+                signal_name = SIGNALS_TO_NAMES_DICT[-return_code]
+                message += f" Received signal: {signal_name}"
+
+            err_message = message
             if err_message is None:
                 continue
             has_failed = True
