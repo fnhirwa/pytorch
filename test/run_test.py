@@ -8,6 +8,7 @@ from distutils.version import LooseVersion
 import functools
 import os
 import pathlib
+from select import select
 import shutil
 import signal
 import subprocess
@@ -942,11 +943,13 @@ def main():
 
     has_failed = False
     failure_messages = []
+    selected_tests1 = [x for x in selected_tests if x not in CUSTOM_HANDLERS]
+    selected_tests2 = [x for x in selected_tests if x in CUSTOM_HANDLERS]
     procs = []
     try:
-        for test in selected_tests:
+        for test in selected_tests1:
             if len(procs) >= 3:
-                for p in procs:
+                for t, p in procs:
                     return_code = wait_for_process(p)
                     assert isinstance(return_code, int) and not isinstance(
                         return_code, bool
@@ -954,7 +957,7 @@ def main():
                     if return_code == 0:
                         continue
 
-                    message = f"{test} failed!"
+                    message = f"{t} failed!"
                     if return_code < 0:
                         # subprocess.Popen returns the child process' exit signal as
                         # return code -N, where N is the signal number.
@@ -969,6 +972,7 @@ def main():
                     if not options_clone.continue_through_error:
                         raise RuntimeError(err_message)
                     print_to_stderr(err_message)
+                procs = []
 
             options_clone = copy.deepcopy(options)
             if test in USE_PYTEST_LIST:
@@ -978,11 +982,64 @@ def main():
             print_to_stderr("Running {} ... [{}]".format(test, datetime.now()))
             handler = CUSTOM_HANDLERS.get(test_module, run_test)
             p = handler(test_module, test_directory, options)
-            procs.append(p)
+            procs.append((test, p))
+
+        for test in selected_tests2:
+            options_clone = copy.deepcopy(options)
+            if test in USE_PYTEST_LIST:
+                options_clone.pytest = True
+            test_module = parse_test_module(test)
+
+            print_to_stderr("Running {} ... [{}]".format(test, datetime.now()))
+            handler = CUSTOM_HANDLERS.get(test_module, run_test)
+            p = handler(test_module, test_directory, options)
+            return_code = wait_for_process(p)
+            assert isinstance(return_code, int) and not isinstance(
+                return_code, bool
+            ), "Return code should be an integer"
+            if return_code == 0:
+                continue
+
+            message = f"{test} failed!"
+            if return_code < 0:
+                # subprocess.Popen returns the child process' exit signal as
+                # return code -N, where N is the signal number.
+                signal_name = SIGNALS_TO_NAMES_DICT[-return_code]
+                message += f" Received signal: {signal_name}"
+
+            err_message = message
+            if err_message is None:
+                continue
+            has_failed = True
+            failure_messages.append(err_message)
+            if not options_clone.continue_through_error:
+                raise RuntimeError(err_message)
+            print_to_stderr(err_message)
 
     finally:
-        for p in procs:
-            wait_for_process(p)
+        for t, p in procs:
+            return_code = wait_for_process(p)
+            assert isinstance(return_code, int) and not isinstance(
+                return_code, bool
+            ), "Return code should be an integer"
+            if return_code == 0:
+                continue
+
+            message = f"{t} failed!"
+            if return_code < 0:
+                # subprocess.Popen returns the child process' exit signal as
+                # return code -N, where N is the signal number.
+                signal_name = SIGNALS_TO_NAMES_DICT[-return_code]
+                message += f" Received signal: {signal_name}"
+
+            err_message = message
+            if err_message is None:
+                continue
+            has_failed = True
+            failure_messages.append(err_message)
+            if not options_clone.continue_through_error:
+                raise RuntimeError(err_message)
+            print_to_stderr(err_message)
         if options.coverage:
             from coverage import Coverage
 
