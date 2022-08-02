@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import json
+import time
 from typing import Dict, Optional, List, cast, Any
 
 import torch
@@ -948,9 +949,13 @@ def main():
     procs = []
     try:
         for test in selected_tests1:
-            if len(procs) >= 3:
+            while len(procs) >= 3:
+                tmp = []
                 for t, p in procs:
-                    return_code = wait_for_process(p)
+                    return_code = p.poll()
+                    if return_code is None:
+                        tmp.append((t, p))
+                        continue
                     assert isinstance(return_code, int) and not isinstance(
                         return_code, bool
                     ), "Return code should be an integer"
@@ -972,7 +977,8 @@ def main():
                     if not options_clone.continue_through_error:
                         raise RuntimeError(err_message)
                     print_to_stderr(err_message)
-                procs = []
+                procs = tmp
+                time.sleep(0.5)
 
             options_clone = copy.deepcopy(options)
             if test in USE_PYTEST_LIST:
