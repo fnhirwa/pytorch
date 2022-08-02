@@ -945,6 +945,31 @@ def main():
     procs = []
     try:
         for test in selected_tests:
+            if len(procs) >= 3:
+                for p in procs:
+                    return_code = wait_for_process(p)
+                    assert isinstance(return_code, int) and not isinstance(
+                        return_code, bool
+                    ), "Return code should be an integer"
+                    if return_code == 0:
+                        continue
+
+                    message = f"{test} failed!"
+                    if return_code < 0:
+                        # subprocess.Popen returns the child process' exit signal as
+                        # return code -N, where N is the signal number.
+                        signal_name = SIGNALS_TO_NAMES_DICT[-return_code]
+                        message += f" Received signal: {signal_name}"
+
+                    err_message = message
+                    if err_message is None:
+                        continue
+                    has_failed = True
+                    failure_messages.append(err_message)
+                    if not options_clone.continue_through_error:
+                        raise RuntimeError(err_message)
+                    print_to_stderr(err_message)
+
             options_clone = copy.deepcopy(options)
             if test in USE_PYTEST_LIST:
                 options_clone.pytest = True
@@ -954,30 +979,10 @@ def main():
             handler = CUSTOM_HANDLERS.get(test_module, run_test)
             p = handler(test_module, test_directory, options)
             procs.append(p)
-        for p in procs:
-            return_code = wait_for_process(p)
-            assert isinstance(return_code, int) and not isinstance(
-                return_code, bool
-            ), "Return code should be an integer"
-            if return_code == 0:
-                return None
 
-            message = f"{test} failed!"
-            if return_code < 0:
-                # subprocess.Popen returns the child process' exit signal as
-                # return code -N, where N is the signal number.
-                signal_name = SIGNALS_TO_NAMES_DICT[-return_code]
-                message += f" Received signal: {signal_name}"
-
-            err_message = message
-            if err_message is None:
-                continue
-            has_failed = True
-            failure_messages.append(err_message)
-            if not options_clone.continue_through_error:
-                raise RuntimeError(err_message)
-            print_to_stderr(err_message)
     finally:
+        for p in procs:
+            wait_for_process(p)
         if options.coverage:
             from coverage import Coverage
 
